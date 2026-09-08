@@ -1,0 +1,198 @@
+# ============================================================
+# DIAGNÓSTICO MICROSOFT 365 / OFFICE - PROXY Y LICENCIA
+# PowerShell 5.1
+# SALIDA SOLO POR PANTALLA
+# ============================================================
+
+$ErrorActionPreference = "SilentlyContinue"
+
+Clear-Host
+
+Write-Host ""
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host "      DIAGNOSTICO MICROSOFT 365 / OFFICE" -ForegroundColor Cyan
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host ""
+
+# ------------------------------------------------------------
+# SERVIDOR
+# ------------------------------------------------------------
+
+Write-Host "[ SERVIDOR ]" -ForegroundColor Yellow
+Write-Host "Equipo : $env:COMPUTERNAME"
+Write-Host "Usuario: $env:USERNAME"
+Write-Host ""
+
+# ------------------------------------------------------------
+# WINHTTP PROXY
+# ------------------------------------------------------------
+
+Write-Host "[ WINHTTP PROXY ]" -ForegroundColor Yellow
+netsh winhttp show proxy
+Write-Host ""
+
+# ------------------------------------------------------------
+# WININET PROXY
+# ------------------------------------------------------------
+
+Write-Host "[ WININET PROXY ]" -ForegroundColor Yellow
+
+$InternetSettings = Get-ItemProperty `
+    "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+
+if ($InternetSettings.ProxyEnable -eq 1) {
+    Write-Host "Proxy habilitado : SI" -ForegroundColor Green
+    Write-Host "Proxy            : $($InternetSettings.ProxyServer)"
+}
+else {
+    Write-Host "Proxy habilitado : NO" -ForegroundColor Yellow
+}
+
+Write-Host ""
+
+# ------------------------------------------------------------
+# ENDPOINTS MICROSOFT 365
+# ------------------------------------------------------------
+
+$Endpoints = @(
+    "login.microsoftonline.com",
+    "office.com",
+    "www.office.com",
+    "activation.sls.microsoft.com",
+    "ols.officeapps.live.com",
+    "officecdn.microsoft.com",
+    "config.office.com",
+    "graph.microsoft.com"
+)
+
+# ------------------------------------------------------------
+# DNS + TCP 443 + HTTPS
+# ------------------------------------------------------------
+
+Write-Host "[ CONECTIVIDAD MICROSOFT 365 ]" -ForegroundColor Yellow
+Write-Host ""
+
+foreach ($Endpoint in $Endpoints) {
+
+    Write-Host "[$Endpoint]" -ForegroundColor Cyan
+
+    # DNS
+    try {
+        $DNS = Resolve-DnsName $Endpoint -ErrorAction Stop
+
+        $IP = ($DNS |
+            Where-Object {$_.IPAddress} |
+            Select-Object -First 1 -ExpandProperty IPAddress)
+
+        Write-Host " DNS      : OK ($IP)" -ForegroundColor Green
+    }
+    catch {
+        Write-Host " DNS      : ERROR" -ForegroundColor Red
+    }
+
+    # TCP 443
+    try {
+        $TCP = Test-NetConnection `
+            -ComputerName $Endpoint `
+            -Port 443 `
+            -WarningAction SilentlyContinue
+
+        if ($TCP.TcpTestSucceeded) {
+            Write-Host " TCP 443  : OK" -ForegroundColor Green
+        }
+        else {
+            Write-Host " TCP 443  : ERROR" -ForegroundColor Red
+        }
+    }
+    catch {
+        Write-Host " TCP 443  : ERROR" -ForegroundColor Red
+    }
+
+    # HTTPS
+    try {
+        $Request = Invoke-WebRequest `
+            -Uri "https://$Endpoint" `
+            -UseBasicParsing `
+            -TimeoutSec 15 `
+            -ErrorAction Stop
+
+        Write-Host " HTTPS    : OK (HTTP $($Request.StatusCode))" -ForegroundColor Green
+    }
+    catch {
+        Write-Host " HTTPS    : ERROR - $($_.Exception.Message)" -ForegroundColor Red
+    }
+
+    Write-Host ""
+}
+
+# ------------------------------------------------------------
+# OFFICE INSTALADO
+# ------------------------------------------------------------
+
+Write-Host "[ OFFICE INSTALADO ]" -ForegroundColor Yellow
+
+$OSPP = @(
+    "$env:ProgramFiles\Microsoft Office\Office16\OSPP.VBS",
+    "$env:ProgramFiles(x86)\Microsoft Office\Office16\OSPP.VBS"
+)
+
+$OSPPEncontrado = $null
+
+foreach ($Ruta in $OSPP) {
+    if (Test-Path $Ruta) {
+        $OSPPEncontrado = $Ruta
+        break
+    }
+}
+
+if ($OSPPEncontrado) {
+
+    Write-Host "OSPP.VBS : $OSPPEncontrado" -ForegroundColor Green
+    Write-Host ""
+
+    Write-Host "[ ESTADO LICENCIA ]" -ForegroundColor Yellow
+
+    $LicenseOutput = cscript.exe //nologo $OSPPEncontrado /dstatus 2>&1 |
+        Out-String
+
+    $LicenseOutput -split "`r?`n" |
+        Where-Object {
+            $_ -match "PRODUCT ID" -or
+            $_ -match "LICENSE NAME" -or
+            $_ -match "LICENSE DESCRIPTION" -or
+            $_ -match "LICENSE STATUS" -or
+            $_ -match "Last 5 characters"
+        } |
+        ForEach-Object {
+            Write-Host $_.Trim()
+        }
+
+}
+else {
+
+    Write-Host "OSPP.VBS : NO ENCONTRADO" -ForegroundColor Red
+}
+
+Write-Host ""
+
+# ------------------------------------------------------------
+# CLICK-TO-RUN
+# ------------------------------------------------------------
+
+Write-Host "[ OFFICE CLICK-TO-RUN ]" -ForegroundColor Yellow
+
+$C2R = Get-Service -Name ClickToRunSvc
+
+if ($C2R) {
+    Write-Host "Servicio : $($C2R.Status)"
+    Write-Host "Inicio   : $($C2R.StartType)"
+}
+else {
+    Write-Host "ClickToRunSvc : NO ENCONTRADO" -ForegroundColor Red
+}
+
+Write-Host ""
+
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host "                    FIN DEL DIAGNOSTICO" -ForegroundColor Cyan
+Write-Host "============================================================" -ForegroundColor Cyan

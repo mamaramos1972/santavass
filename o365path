@@ -1,16 +1,17 @@
 # ============================================================
-# DIAGNÓSTICO MICROSOFT 365 / OFFICE - PROXY Y LICENCIA
+# DIAGNOSTICO COMPLETO MICROSOFT 365 APPS
+# Proxy + conectividad + Office + licencia + token
 # PowerShell 5.1
-# SALIDA SOLO POR PANTALLA
+# SOLO SALIDA POR PANTALLA
 # ============================================================
 
 $ErrorActionPreference = "SilentlyContinue"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 Clear-Host
 
-Write-Host ""
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host "      DIAGNOSTICO MICROSOFT 365 / OFFICE" -ForegroundColor Cyan
+Write-Host "     DIAGNOSTICO MICROSOFT 365 APPS / ACTIVACION" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -19,180 +20,356 @@ Write-Host ""
 # ------------------------------------------------------------
 
 Write-Host "[ SERVIDOR ]" -ForegroundColor Yellow
-Write-Host "Equipo : $env:COMPUTERNAME"
-Write-Host "Usuario: $env:USERNAME"
+
+$OS = Get-CimInstance Win32_OperatingSystem
+
+Write-Host "Equipo       : $env:COMPUTERNAME"
+Write-Host "Usuario      : $env:USERDOMAIN\$env:USERNAME"
+Write-Host "Sistema      : $($OS.Caption)"
+Write-Host "Arquitectura : $($OS.OSArchitecture)"
 Write-Host ""
 
 # ------------------------------------------------------------
-# WINHTTP PROXY
+# PROXY WINHTTP
 # ------------------------------------------------------------
 
-Write-Host "[ WINHTTP PROXY ]" -ForegroundColor Yellow
+Write-Host "[ PROXY WINHTTP ]" -ForegroundColor Yellow
 netsh winhttp show proxy
 Write-Host ""
 
 # ------------------------------------------------------------
-# WININET PROXY
+# PROXY WININET
 # ------------------------------------------------------------
 
-Write-Host "[ WININET PROXY ]" -ForegroundColor Yellow
+Write-Host "[ PROXY WININET ]" -ForegroundColor Yellow
 
-$InternetSettings = Get-ItemProperty `
+$Internet = Get-ItemProperty `
     "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
 
-if ($InternetSettings.ProxyEnable -eq 1) {
-    Write-Host "Proxy habilitado : SI" -ForegroundColor Green
-    Write-Host "Proxy            : $($InternetSettings.ProxyServer)"
+if ($Internet.ProxyEnable -eq 1) {
+    Write-Host "Estado : HABILITADO" -ForegroundColor Green
+    Write-Host "Proxy  : $($Internet.ProxyServer)"
 }
 else {
-    Write-Host "Proxy habilitado : NO" -ForegroundColor Yellow
+    Write-Host "Estado : DESHABILITADO" -ForegroundColor Yellow
 }
 
 Write-Host ""
 
 # ------------------------------------------------------------
-# ENDPOINTS MICROSOFT 365
+# SERVICIO CLICK-TO-RUN
 # ------------------------------------------------------------
 
+Write-Host "[ OFFICE CLICK-TO-RUN ]" -ForegroundColor Yellow
+
+$C2R = Get-Service ClickToRunSvc
+
+if ($C2R) {
+    Write-Host "Servicio : $($C2R.Status)"
+    Write-Host "Inicio   : $($C2R.StartType)"
+
+    if ($C2R.Status -eq "Running") {
+        Write-Host "Resultado: OK" -ForegroundColor Green
+    }
+    else {
+        Write-Host "Resultado: ERROR" -ForegroundColor Red
+    }
+}
+else {
+    Write-Host "ClickToRunSvc no encontrado" -ForegroundColor Red
+}
+
+Write-Host ""
+
+# ------------------------------------------------------------
+# CONFIGURACION CLICK-TO-RUN
+# ------------------------------------------------------------
+
+Write-Host "[ CONFIGURACION OFFICE ]" -ForegroundColor Yellow
+
+$C2RPaths = @(
+    "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration",
+    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office\ClickToRun\Configuration"
+)
+
+$C2RConfig = $null
+
+foreach ($Path in $C2RPaths) {
+    if (Test-Path $Path) {
+        $C2RConfig = Get-ItemProperty $Path
+        break
+    }
+}
+
+if ($C2RConfig) {
+
+    Write-Host "ProductReleaseIds       : $($C2RConfig.ProductReleaseIds)"
+    Write-Host "ClientVersionToRun      : $($C2RConfig.ClientVersionToRun)"
+    Write-Host "Platform                : $($C2RConfig.Platform)"
+    Write-Host "UpdateChannel           : $($C2RConfig.UpdateChannel)"
+    Write-Host "CDNBaseUrl              : $($C2RConfig.CDNBaseUrl)"
+    Write-Host "SharedComputerLicensing : $($C2RConfig.SharedComputerLicensing)"
+    Write-Host "DeviceBasedLicensing    : $($C2RConfig.O365ProPlusRetailDeviceBasedLicensing)"
+    Write-Host "SCLCacheOverride        : $($C2RConfig.SCLCacheOverride)"
+}
+else {
+    Write-Host "Configuración Click-to-Run no encontrada" -ForegroundColor Red
+}
+
+Write-Host ""
+
+# ------------------------------------------------------------
+# ENDPOINTS UTILIZADOS POR LICENCIA M365
+# ------------------------------------------------------------
+
+Write-Host "[ ENDPOINTS DE LICENCIA MICROSOFT 365 ]" -ForegroundColor Yellow
+Write-Host ""
+
 $Endpoints = @(
-    "login.microsoftonline.com",
-    "office.com",
-    "www.office.com",
-    "activation.sls.microsoft.com",
     "ols.officeapps.live.com",
-    "officecdn.microsoft.com",
+    "activation.sls.microsoft.com",
+    "login.microsoftonline.com",
+    "login.windows.net",
+    "officeclient.microsoft.com",
     "config.office.com",
     "graph.microsoft.com"
 )
 
-# ------------------------------------------------------------
-# DNS + TCP 443 + HTTPS
-# ------------------------------------------------------------
+foreach ($HostName in $Endpoints) {
 
-Write-Host "[ CONECTIVIDAD MICROSOFT 365 ]" -ForegroundColor Yellow
-Write-Host ""
-
-foreach ($Endpoint in $Endpoints) {
-
-    Write-Host "[$Endpoint]" -ForegroundColor Cyan
+    Write-Host "------------------------------------------------------------"
+    Write-Host $HostName -ForegroundColor Cyan
 
     # DNS
     try {
-        $DNS = Resolve-DnsName $Endpoint -ErrorAction Stop
+        $DNS = Resolve-DnsName $HostName -Type A -ErrorAction Stop
 
         $IP = ($DNS |
             Where-Object {$_.IPAddress} |
             Select-Object -First 1 -ExpandProperty IPAddress)
 
-        Write-Host " DNS      : OK ($IP)" -ForegroundColor Green
+        Write-Host "DNS       : OK ($IP)" -ForegroundColor Green
     }
     catch {
-        Write-Host " DNS      : ERROR" -ForegroundColor Red
+        Write-Host "DNS       : ERROR" -ForegroundColor Red
     }
 
-    # TCP 443
+    # TCP
     try {
         $TCP = Test-NetConnection `
-            -ComputerName $Endpoint `
+            -ComputerName $HostName `
             -Port 443 `
             -WarningAction SilentlyContinue
 
         if ($TCP.TcpTestSucceeded) {
-            Write-Host " TCP 443  : OK" -ForegroundColor Green
+            Write-Host "TCP 443   : OK" -ForegroundColor Green
         }
         else {
-            Write-Host " TCP 443  : ERROR" -ForegroundColor Red
+            Write-Host "TCP 443   : ERROR" -ForegroundColor Red
         }
     }
     catch {
-        Write-Host " TCP 443  : ERROR" -ForegroundColor Red
+        Write-Host "TCP 443   : ERROR" -ForegroundColor Red
     }
 
     # HTTPS
     try {
-        $Request = Invoke-WebRequest `
-            -Uri "https://$Endpoint" `
+
+        $R = Invoke-WebRequest `
+            -Uri "https://$HostName" `
             -UseBasicParsing `
             -TimeoutSec 15 `
             -ErrorAction Stop
 
-        Write-Host " HTTPS    : OK (HTTP $($Request.StatusCode))" -ForegroundColor Green
+        Write-Host "HTTPS     : OK ($($R.StatusCode))" -ForegroundColor Green
     }
     catch {
-        Write-Host " HTTPS    : ERROR - $($_.Exception.Message)" -ForegroundColor Red
+
+        Write-Host "HTTPS     : ERROR" -ForegroundColor Red
+        Write-Host "  $($_.Exception.Message)" -ForegroundColor DarkRed
+    }
+}
+
+Write-Host ""
+
+# ------------------------------------------------------------
+# VNEXTDIAG
+# ------------------------------------------------------------
+
+Write-Host "[ LICENCIA VNEXT - MICROSOFT 365 APPS ]" -ForegroundColor Yellow
+Write-Host ""
+
+$VNextPaths = @(
+    "$env:ProgramFiles\Microsoft Office\root\Licenses16\vnextdiag.ps1",
+    "${env:ProgramFiles(x86)}\Microsoft Office\root\Licenses16\vnextdiag.ps1",
+    "$env:ProgramFiles\Microsoft Office\root\Licenses16\vnextdiag.ps1"
+)
+
+$VNext = $VNextPaths |
+    Where-Object { Test-Path $_ } |
+    Select-Object -First 1
+
+if ($VNext) {
+
+    Write-Host "vnextdiag : $VNext" -ForegroundColor Green
+    Write-Host ""
+
+    try {
+
+        $Diag = & powershell.exe `
+            -NoProfile `
+            -ExecutionPolicy Bypass `
+            -File $VNext `
+            -action list 2>&1
+
+        if ($Diag) {
+            $Diag | ForEach-Object {
+                Write-Host $_
+            }
+        }
+        else {
+            Write-Host "vnextdiag no devuelve información" -ForegroundColor Red
+        }
+    }
+    catch {
+        Write-Host $_.Exception.Message -ForegroundColor Red
     }
 
-    Write-Host ""
 }
+else {
+
+    Write-Host "vnextdiag.ps1 NO encontrado" -ForegroundColor Red
+}
+
+Write-Host ""
+
+# ------------------------------------------------------------
+# TOKENS OFFICE
+# ------------------------------------------------------------
+
+Write-Host "[ TOKENS / CACHE DE LICENCIA ]" -ForegroundColor Yellow
+Write-Host ""
+
+$TokenPaths = @(
+    "$env:LOCALAPPDATA\Microsoft\Office\16.0\Licensing",
+    "$env:LOCALAPPDATA\Microsoft\Office\Licenses",
+    "$env:LOCALAPPDATA\Microsoft\Office\16.0\Identity",
+    "$env:LOCALAPPDATA\Microsoft\Office\16.0\Identity\IdentityCRL"
+)
+
+$TokenEncontrado = $false
+
+foreach ($Path in $TokenPaths) {
+
+    if (Test-Path $Path) {
+
+        $Items = Get-ChildItem `
+            $Path `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+        if ($Items) {
+
+            $TokenEncontrado = $true
+
+            Write-Host "ENCONTRADO : $Path" -ForegroundColor Green
+            Write-Host "Elementos  : $($Items.Count)"
+        }
+    }
+}
+
+if (-not $TokenEncontrado) {
+    Write-Host "NO SE ENCUENTRAN TOKENS/CACHE" -ForegroundColor Red
+}
+
+Write-Host ""
+
+# ------------------------------------------------------------
+# REGISTRO IDENTIDAD OFFICE
+# ------------------------------------------------------------
+
+Write-Host "[ IDENTIDAD OFFICE ]" -ForegroundColor Yellow
+Write-Host ""
+
+$Identity = "HKCU:\Software\Microsoft\Office\16.0\Common\Identity"
+
+if (Test-Path $Identity) {
+
+    Get-ItemProperty $Identity |
+        Select-Object * |
+        Format-List
+}
+else {
+
+    Write-Host "No existe la clave de identidad" -ForegroundColor Red
+}
+
+Write-Host ""
+
+# ------------------------------------------------------------
+# CREDENCIALES RELACIONADAS CON OFFICE
+# ------------------------------------------------------------
+
+Write-Host "[ CREDENCIALES ]" -ForegroundColor Yellow
+Write-Host ""
+
+$Creds = cmdkey /list 2>&1 |
+    Select-String "MicrosoftOffice|Office16|ADAL|AzureAD|OneAuth"
+
+if ($Creds) {
+
+    Write-Host "Se han encontrado credenciales relacionadas:" -ForegroundColor Green
+
+    $Creds | ForEach-Object {
+        Write-Host "  $($_.Line.Trim())"
+    }
+}
+else {
+
+    Write-Host "No se han encontrado credenciales relacionadas" -ForegroundColor Yellow
+}
+
+Write-Host ""
 
 # ------------------------------------------------------------
 # OFFICE INSTALADO
 # ------------------------------------------------------------
 
-Write-Host "[ OFFICE INSTALADO ]" -ForegroundColor Yellow
+Write-Host "[ PRODUCTOS OFFICE INSTALADOS ]" -ForegroundColor Yellow
+Write-Host ""
 
-$OSPP = @(
-    "$env:ProgramFiles\Microsoft Office\Office16\OSPP.VBS",
-    "$env:ProgramFiles(x86)\Microsoft Office\Office16\OSPP.VBS"
+$UninstallPaths = @(
+    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
 )
 
-$OSPPEncontrado = $null
+$OfficeProducts = foreach ($Path in $UninstallPaths) {
 
-foreach ($Ruta in $OSPP) {
-    if (Test-Path $Ruta) {
-        $OSPPEncontrado = $Ruta
-        break
-    }
-}
-
-if ($OSPPEncontrado) {
-
-    Write-Host "OSPP.VBS : $OSPPEncontrado" -ForegroundColor Green
-    Write-Host ""
-
-    Write-Host "[ ESTADO LICENCIA ]" -ForegroundColor Yellow
-
-    $LicenseOutput = cscript.exe //nologo $OSPPEncontrado /dstatus 2>&1 |
-        Out-String
-
-    $LicenseOutput -split "`r?`n" |
+    Get-ItemProperty $Path |
         Where-Object {
-            $_ -match "PRODUCT ID" -or
-            $_ -match "LICENSE NAME" -or
-            $_ -match "LICENSE DESCRIPTION" -or
-            $_ -match "LICENSE STATUS" -or
-            $_ -match "Last 5 characters"
+            $_.DisplayName -match "Microsoft 365|Microsoft Office|Office 365"
         } |
-        ForEach-Object {
-            Write-Host $_.Trim()
-        }
+        Select-Object DisplayName,DisplayVersion
+}
 
+if ($OfficeProducts) {
+
+    $OfficeProducts |
+        Sort-Object DisplayName -Unique |
+        Format-Table -AutoSize
 }
 else {
 
-    Write-Host "OSPP.VBS : NO ENCONTRADO" -ForegroundColor Red
+    Write-Host "No se ha localizado producto Office en el registro" -ForegroundColor Red
 }
 
 Write-Host ""
 
 # ------------------------------------------------------------
-# CLICK-TO-RUN
+# FINAL
 # ------------------------------------------------------------
-
-Write-Host "[ OFFICE CLICK-TO-RUN ]" -ForegroundColor Yellow
-
-$C2R = Get-Service -Name ClickToRunSvc
-
-if ($C2R) {
-    Write-Host "Servicio : $($C2R.Status)"
-    Write-Host "Inicio   : $($C2R.StartType)"
-}
-else {
-    Write-Host "ClickToRunSvc : NO ENCONTRADO" -ForegroundColor Red
-}
-
-Write-Host ""
 
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host "                    FIN DEL DIAGNOSTICO" -ForegroundColor Cyan
+Write-Host "                 FIN DEL DIAGNOSTICO" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan

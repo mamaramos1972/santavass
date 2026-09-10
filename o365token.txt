@@ -1,0 +1,192 @@
+# ============================================================
+# O365 2806 - CITRIX SCA
+# WINDOWS SERVER 2019
+# COMPARACION DE LICENCIA / TOKEN
+# NO MODIFICA NADA
+# ============================================================
+
+Clear-Host
+
+$Licensing = "$env:LOCALAPPDATA\Microsoft\Office\16.0\Licensing"
+$Identity  = "$env:LOCALAPPDATA\Microsoft\Office\16.0\Identity"
+
+Write-Host "============================================================"
+Write-Host " OFFICE / CITRIX SCA - DIAGNOSTICO DE LICENCIA"
+Write-Host "============================================================"
+Write-Host ""
+
+# 1 - USUARIO
+Write-Host "[1] USUARIO" -ForegroundColor Yellow
+whoami
+Write-Host ""
+
+# 2 - VERSION Y SCA
+Write-Host "[2] OFFICE / SCA" -ForegroundColor Yellow
+
+$Cfg = Get-ItemProperty `
+    "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration" `
+    -ErrorAction SilentlyContinue
+
+[PSCustomObject]@{
+    Version             = $Cfg.VersionToReport
+    ClientVersion       = $Cfg.ClientVersionToReport
+    Product             = $Cfg.ProductReleaseIds
+    Platform            = $Cfg.Platform
+    Channel             = $Cfg.UpdateChannel
+    SharedComputer      = $Cfg.SharedComputerLicensing
+} | Format-List
+
+# 3 - LICENSING
+Write-Host "[3] LICENSING TOKEN" -ForegroundColor Yellow
+Write-Host "Ruta: $Licensing"
+Write-Host ""
+
+if (Test-Path $Licensing) {
+
+    $Files = Get-ChildItem $Licensing -Force -ErrorAction SilentlyContinue
+
+    if ($Files) {
+
+        $Files |
+            Select-Object Name,Length,LastWriteTime,Attributes |
+            Format-Table -AutoSize
+
+    }
+    else {
+
+        Write-Host "LA CARPETA EXISTE PERO ESTA VACIA" -ForegroundColor Red
+    }
+
+}
+else {
+
+    Write-Host "LA CARPETA NO EXISTE" -ForegroundColor Red
+}
+
+Write-Host ""
+
+# 4 - IDENTITY
+Write-Host "[4] IDENTITY" -ForegroundColor Yellow
+
+if (Test-Path $Identity) {
+
+    Get-ChildItem $Identity -Force -Recurse `
+        -ErrorAction SilentlyContinue |
+        Select-Object FullName,Length,LastWriteTime |
+        Format-Table -AutoSize
+
+}
+else {
+
+    Write-Host "NO EXISTE $Identity" -ForegroundColor Red
+}
+
+Write-Host ""
+
+# 5 - REGISTRO SCA
+Write-Host "[5] REGISTRO SCA" -ForegroundColor Yellow
+
+$Paths = @(
+    "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration",
+    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office\ClickToRun\Configuration"
+)
+
+foreach ($Path in $Paths) {
+
+    if (Test-Path $Path) {
+
+        Write-Host ""
+        Write-Host $Path
+
+        Get-ItemProperty $Path -ErrorAction SilentlyContinue |
+            Select-Object SharedComputerLicensing,
+                          SCLCacheOverride,
+                          SCLCacheOverrideDirectory,
+                          DeviceBasedLicensing |
+            Format-List
+    }
+}
+
+# 6 - ACTIVACION DEL USUARIO
+Write-Host "[6] IDENTIDAD DEL USUARIO" -ForegroundColor Yellow
+
+$RegIdentity = `
+"HKCU:\Software\Microsoft\Office\16.0\Common\Identity"
+
+if (Test-Path $RegIdentity) {
+
+    Get-ItemProperty $RegIdentity `
+        -ErrorAction SilentlyContinue |
+        Format-List
+
+}
+else {
+
+    Write-Host "NO EXISTE REGISTRO DE IDENTITY" -ForegroundColor Red
+}
+
+# 7 - CREDENCIALES
+Write-Host "[7] CREDENCIALES OFFICE" -ForegroundColor Yellow
+
+cmdkey /list |
+    Select-String "Office|Microsoft|ADAL|OneAuth" |
+    ForEach-Object {
+        Write-Host $_
+    }
+
+# 8 - SERVICIO CLICK TO RUN
+Write-Host ""
+Write-Host "[8] CLICK-TO-RUN" -ForegroundColor Yellow
+
+Get-Service ClickToRunSvc -ErrorAction SilentlyContinue |
+    Select-Object Name,Status,StartType |
+    Format-Table -AutoSize
+
+# 9 - PROCESOS OFFICE
+Write-Host "[9] PROCESOS OFFICE" -ForegroundColor Yellow
+
+Get-Process WINWORD,EXCEL,OUTLOOK,POWERPNT `
+    -ErrorAction SilentlyContinue |
+    Select-Object Name,Id,Path |
+    Format-Table -AutoSize
+
+# 10 - FECHAS DE LOS TOKEN
+Write-Host ""
+Write-Host "[10] ARCHIVOS DE LICENCIA" -ForegroundColor Yellow
+
+if (Test-Path $Licensing) {
+
+    Get-ChildItem $Licensing -Force `
+        -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime |
+        Select-Object Name,Length,CreationTime,LastWriteTime |
+        Format-Table -AutoSize
+}
+
+# 11 - RESULTADO
+Write-Host ""
+Write-Host "============================================================"
+Write-Host " RESULTADO"
+Write-Host "============================================================"
+
+$TokenCount = 0
+
+if (Test-Path $Licensing) {
+    $TokenCount = @(Get-ChildItem $Licensing -Force `
+        -ErrorAction SilentlyContinue).Count
+}
+
+[PSCustomObject]@{
+    Usuario         = $env:USERNAME
+    Servidor        = $env:COMPUTERNAME
+    Office          = $Cfg.VersionToReport
+    SCA             = $Cfg.SharedComputerLicensing
+    LicensingExiste = Test-Path $Licensing
+    Tokens          = $TokenCount
+    IdentityExiste  = Test-Path $Identity
+    ClickToRun      = (Get-Service ClickToRunSvc `
+                       -ErrorAction SilentlyContinue).Status
+} | Format-List
+
+Write-Host ""
+Write-Host "============================================================"

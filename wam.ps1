@@ -1,0 +1,1 @@
+Get-AppxPackage Microsoft.AAD.BrokerPlugin Get-AppxPackage Microsoft.Windows.CloudExperienceHost Get-Service TokenBroker,wlidsvc | Select-Object Name,Status,StartType Get-WinEvent -LogName "Microsoft-Windows-AAD/Operational" -MaxEvents 30 | Select-Object TimeCreated,Id,LevelDisplayName,Message

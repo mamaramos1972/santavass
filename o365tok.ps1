@@ -1,375 +1,423 @@
 # ============================================================
-# DIAGNOSTICO O365 2806 - CITRIX SCA
-# Windows Server 2019
+# O365 2806 - DIAGNOSTICO LICENCIA SCA
+# Windows Server 2019 / Citrix
 # PowerShell 5.1
 #
 # EJECUTAR COMO ADMINISTRADOR
-# PREGUNTA EL UPN DEL USUARIO CITRIX
+# PREGUNTA EL UPN DEL USUARIO
 # NO MODIFICA NADA
 # ============================================================
 
 Clear-Host
 
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host "   DIAGNOSTICO O365 2806 - CITRIX SCA" -ForegroundColor Cyan
+Write-Host " O365 2806 - COMPROBACION LICENCIA USUARIO CITRIX" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host ""
 
 # ------------------------------------------------------------
-# 1. PREGUNTAR USUARIO
+# PEDIR UPN
 # ------------------------------------------------------------
 
 do {
-    $UPN = Read-Host "Introduce el UPN del usuario (ejemplo usuario@dominio.com)"
+    $UPN = Read-Host "Introduce el UPN del usuario"
 }
 while ([string]::IsNullOrWhiteSpace($UPN))
 
+$UPN = $UPN.Trim()
+
 Write-Host ""
-Write-Host "Usuario a comprobar: $UPN" -ForegroundColor Green
+Write-Host "Usuario: $UPN" -ForegroundColor Green
 Write-Host ""
 
 # ------------------------------------------------------------
-# 2. SERVIDOR
+# OBTENER DOMINIO Y USUARIO DESDE EL UPN
 # ------------------------------------------------------------
 
-Write-Host "[1] SERVIDOR" -ForegroundColor Yellow
+$Parts = $UPN.Split("@")
 
-$OS = Get-CimInstance Win32_OperatingSystem
-
-[PSCustomObject]@{
-    Servidor = $env:COMPUTERNAME
-    Sistema  = $OS.Caption
-    Version  = $OS.Version
-} | Format-List
-
-# ------------------------------------------------------------
-# 3. OFFICE
-# ------------------------------------------------------------
-
-Write-Host "[2] OFFICE / CLICK-TO-RUN" -ForegroundColor Yellow
-
-$RegPath = "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration"
-
-if (-not (Test-Path $RegPath)) {
-    Write-Host "ERROR: No existe la configuración Click-To-Run." -ForegroundColor Red
+if ($Parts.Count -ne 2) {
+    Write-Host "ERROR: El UPN debe tener formato usuario@dominio.com" -ForegroundColor Red
     exit
 }
 
-$Cfg = Get-ItemProperty $RegPath
-
-[PSCustomObject]@{
-    Version           = $Cfg.VersionToReport
-    ClientVersion     = $Cfg.ClientVersionToReport
-    Producto          = $Cfg.ProductReleaseIds
-    Plataforma        = $Cfg.Platform
-    Canal             = $Cfg.UpdateChannel
-    SharedComputer    = $Cfg.SharedComputerLicensing
-    SCLCacheOverride  = $Cfg.SCLCacheOverride
-    SCLCacheDirectory = $Cfg.SCLCacheOverrideDirectory
-} | Format-List
+$UserName = $Parts[0]
+$Domain   = $Parts[1]
 
 # ------------------------------------------------------------
-# 4. COMPROBAR SCA
+# OBTENER SID DEL USUARIO
 # ------------------------------------------------------------
 
-Write-Host "[3] SHARED COMPUTER ACTIVATION" -ForegroundColor Yellow
+Write-Host "[1] OBTENIENDO SID DEL USUARIO" -ForegroundColor Yellow
 
-if ($Cfg.SharedComputerLicensing -eq 1) {
-    Write-Host "SCA = ACTIVADO" -ForegroundColor Green
+try {
+
+    $Account = New-Object System.Security.Principal.NTAccount(
+        $Domain,
+        $UserName
+    )
+
+    $SID = $Account.Translate(
+        [System.Security.Principal.SecurityIdentifier]
+    ).Value
+
+    Write-Host "SID: $SID" -ForegroundColor Green
+}
+catch {
+
+    Write-Host "ERROR: No se puede resolver $UPN a un SID." -ForegroundColor Red
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    exit
+}
+
+# ------------------------------------------------------------
+# BUSCAR PERFIL MEDIANTE SID
+# ------------------------------------------------------------
+
+Write-Host ""
+Write-Host "[2] BUSCANDO PERFIL WINDOWS DEL USUARIO" -ForegroundColor Yellow
+
+$ProfileKey = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$SID"
+
+if (-not (Test-Path $ProfileKey)) {
+
+    Write-Host "NO EXISTE PERFIL LOCAL PARA ESTE USUARIO." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "El usuario debe haber iniciado sesión previamente en este servidor." -ForegroundColor Yellow
+    exit
+}
+
+$Profile = Get-ItemProperty $ProfileKey
+
+$ProfilePath = $Profile.ProfileImagePath
+
+Write-Host "Perfil: $ProfilePath" -ForegroundColor Green
+
+# ------------------------------------------------------------
+# RUTAS OFFICE DEL USUARIO
+# ------------------------------------------------------------
+
+$LicensingPath = Join-Path `
+    $ProfilePath `
+    "AppData\Local\Microsoft\Office\16.0\Licensing"
+
+$IdentityPath = Join-Path `
+    $ProfilePath `
+    "AppData\Local\Microsoft\Office\16.0\Identity"
+
+$OneAuthPath = Join-Path `
+    $ProfilePath `
+    "AppData\Local\Microsoft\OneAuth"
+
+$IdentityCachePath = Join-Path `
+    $ProfilePath `
+    "AppData\Local\Microsoft\IdentityCache"
+
+# ------------------------------------------------------------
+# OFFICE INSTALADO
+# ------------------------------------------------------------
+
+Write-Host ""
+Write-Host "[3] OFFICE INSTALADO" -ForegroundColor Yellow
+
+$OfficeReg = "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration"
+
+if (Test-Path $OfficeReg) {
+
+    $Office = Get-ItemProperty $OfficeReg
+
+    [PSCustomObject]@{
+        Version            = $Office.VersionToReport
+        ClientVersion      = $Office.ClientVersionToReport
+        Producto           = $Office.ProductReleaseIds
+        Canal              = $Office.UpdateChannel
+        Plataforma         = $Office.Platform
+        SharedComputer     = $Office.SharedComputerLicensing
+        SCLCacheOverride   = $Office.SCLCacheOverride
+        SCLCacheDirectory  = $Office.SCLCacheOverrideDirectory
+    } | Format-List
+
 }
 else {
+
+    Write-Host "NO SE ENCUENTRA OFFICE CLICK-TO-RUN." -ForegroundColor Red
+    exit
+}
+
+# ------------------------------------------------------------
+# SCA
+# ------------------------------------------------------------
+
+Write-Host "[4] SHARED COMPUTER ACTIVATION" -ForegroundColor Yellow
+
+if ($Office.SharedComputerLicensing -eq 1) {
+
+    Write-Host "SCA = ACTIVADO" -ForegroundColor Green
+
+}
+else {
+
     Write-Host "SCA = NO ACTIVADO" -ForegroundColor Red
 }
 
-Write-Host ""
-
 # ------------------------------------------------------------
-# 5. BUSCAR EL PERFIL DEL USUARIO
-#
-# Se busca el UPN dentro de:
-# - OneAuth
-# - IdentityCache
-# - Office Identity
-# - Licensing
-#
-# El script se ejecuta como ADMINISTRADOR, por eso no utiliza
-# el perfil del usuario que ejecuta PowerShell.
-# ------------------------------------------------------------
-
-Write-Host "[4] BUSCANDO PERFIL DEL USUARIO" -ForegroundColor Yellow
-
-$Profiles = Get-ChildItem "C:\Users" -Directory -Force `
-    -ErrorAction SilentlyContinue |
-    Where-Object {
-        $_.Name -notin @(
-            "Public",
-            "Default",
-            "Default User",
-            "All Users"
-        )
-    }
-
-$UserProfiles = @()
-
-foreach ($Profile in $Profiles) {
-
-    $Base = $Profile.FullName
-
-    $Paths = @(
-        "$Base\AppData\Local\Microsoft\Office\16.0\Licensing",
-        "$Base\AppData\Local\Microsoft\Office\16.0\Identity",
-        "$Base\AppData\Local\Microsoft\OneAuth",
-        "$Base\AppData\Local\Microsoft\IdentityCache"
-    )
-
-    $UPNFound = $false
-
-    foreach ($Path in $Paths) {
-
-        if (Test-Path $Path) {
-
-            try {
-
-                $Match = Get-ChildItem $Path -Recurse -Force -File `
-                    -ErrorAction SilentlyContinue |
-                    Select-String -Pattern $UPN `
-                    -SimpleMatch `
-                    -ErrorAction SilentlyContinue |
-                    Select-Object -First 1
-
-                if ($Match) {
-                    $UPNFound = $true
-                    break
-                }
-
-            }
-            catch {}
-        }
-    }
-
-    if ($UPNFound) {
-
-        $UserProfiles += $Base
-    }
-}
-
-if ($UserProfiles.Count -eq 0) {
-
-    Write-Host ""
-    Write-Host "NO SE HA ENCONTRADO EL UPN EN LOS PERFILES LOCALES." `
-        -ForegroundColor Red
-
-    Write-Host ""
-    Write-Host "Perfiles existentes en el servidor:" `
-        -ForegroundColor Yellow
-
-    $Profiles |
-        Select-Object Name,FullName |
-        Format-Table -AutoSize
-
-}
-else {
-
-    Write-Host ""
-    Write-Host "PERFIL ENCONTRADO:" -ForegroundColor Green
-
-    $UserProfiles |
-        ForEach-Object {
-            Write-Host $_ -ForegroundColor Green
-        }
-}
-
-# ------------------------------------------------------------
-# 6. COMPROBAR LICENSING DEL PERFIL
+# LICENSING
 # ------------------------------------------------------------
 
 Write-Host ""
-Write-Host "[5] TOKEN DE LICENCIA" -ForegroundColor Yellow
+Write-Host "[5] LICENSING DEL USUARIO" -ForegroundColor Yellow
+Write-Host $LicensingPath
+Write-Host ""
 
-$TotalTokens = 0
+if (Test-Path $LicensingPath) {
 
-foreach ($ProfilePath in $UserProfiles) {
+    $LicenseFiles = Get-ChildItem `
+        $LicensingPath `
+        -Force `
+        -File `
+        -ErrorAction SilentlyContinue
 
-    $LicensingPath = `
-        "$ProfilePath\AppData\Local\Microsoft\Office\16.0\Licensing"
+    if ($LicenseFiles.Count -gt 0) {
 
-    Write-Host ""
-    Write-Host "Perfil: $ProfilePath"
-    Write-Host "Licensing: $LicensingPath"
+        Write-Host "ARCHIVOS ENCONTRADOS:" -ForegroundColor Green
 
-    if (Test-Path $LicensingPath) {
-
-        $Files = Get-ChildItem $LicensingPath -Force `
-            -ErrorAction SilentlyContinue
-
-        if ($Files) {
-
-            Write-Host "ARCHIVOS ENCONTRADOS:" -ForegroundColor Green
-
-            $Files |
-                Select-Object Name,Length,CreationTime,LastWriteTime |
-                Format-Table -AutoSize
-
-            $TotalTokens += $Files.Count
-
-        }
-        else {
-
-            Write-Host "CARPETA EXISTE PERO ESTA VACIA." `
-                -ForegroundColor Red
-        }
+        $LicenseFiles |
+            Select-Object `
+                Name,
+                Length,
+                CreationTime,
+                LastWriteTime |
+            Format-Table -AutoSize
 
     }
     else {
 
-        Write-Host "LA CARPETA LICENSING NO EXISTE." `
-            -ForegroundColor Red
+        Write-Host "LA CARPETA EXISTE PERO ESTA VACIA." -ForegroundColor Red
     }
+
+}
+else {
+
+    Write-Host "NO EXISTE LA CARPETA LICENSING." -ForegroundColor Red
 }
 
 # ------------------------------------------------------------
-# 7. IDENTITY / ONEAUTH
+# IDENTITY
 # ------------------------------------------------------------
 
 Write-Host ""
-Write-Host "[6] IDENTITY / ONEAUTH" -ForegroundColor Yellow
+Write-Host "[6] OFFICE IDENTITY" -ForegroundColor Yellow
 
-foreach ($ProfilePath in $UserProfiles) {
+if (Test-Path $IdentityPath) {
 
-    Write-Host ""
-    Write-Host "Perfil: $ProfilePath" -ForegroundColor Cyan
+    $IdentityFiles = Get-ChildItem `
+        $IdentityPath `
+        -Recurse `
+        -Force `
+        -File `
+        -ErrorAction SilentlyContinue
 
-    $IdentityPaths = @(
-        "$ProfilePath\AppData\Local\Microsoft\Office\16.0\Identity",
-        "$ProfilePath\AppData\Local\Microsoft\OneAuth",
-        "$ProfilePath\AppData\Local\Microsoft\IdentityCache"
-    )
+    Write-Host "Carpeta existente: SI" -ForegroundColor Green
+    Write-Host "Archivos: $($IdentityFiles.Count)"
 
-    foreach ($Path in $IdentityPaths) {
+}
+else {
 
-        if (Test-Path $Path) {
+    Write-Host "NO EXISTE IDENTITY." -ForegroundColor Red
+}
 
-            $Count = @(Get-ChildItem $Path -Recurse -Force -File `
-                -ErrorAction SilentlyContinue).Count
+# ------------------------------------------------------------
+# ONEAUTH
+# ------------------------------------------------------------
 
-            [PSCustomObject]@{
-                Ruta     = $Path
-                Existe   = "SI"
-                Archivos = $Count
-            }
+Write-Host ""
+Write-Host "[7] ONEAUTH" -ForegroundColor Yellow
 
-        }
-        else {
+if (Test-Path $OneAuthPath) {
 
-            [PSCustomObject]@{
-                Ruta     = $Path
-                Existe   = "NO"
-                Archivos = 0
-            }
-        }
+    $OneAuthFiles = Get-ChildItem `
+        $OneAuthPath `
+        -Recurse `
+        -Force `
+        -File `
+        -ErrorAction SilentlyContinue
+
+    Write-Host "Carpeta existente: SI" -ForegroundColor Green
+    Write-Host "Archivos: $($OneAuthFiles.Count)"
+
+}
+else {
+
+    Write-Host "NO EXISTE ONEAUTH." -ForegroundColor Red
+}
+
+# ------------------------------------------------------------
+# IDENTITY CACHE
+# ------------------------------------------------------------
+
+Write-Host ""
+Write-Host "[8] IDENTITY CACHE" -ForegroundColor Yellow
+
+if (Test-Path $IdentityCachePath) {
+
+    $CacheFiles = Get-ChildItem `
+        $IdentityCachePath `
+        -Recurse `
+        -Force `
+        -File `
+        -ErrorAction SilentlyContinue
+
+    Write-Host "Carpeta existente: SI" -ForegroundColor Green
+    Write-Host "Archivos: $($CacheFiles.Count)"
+
+}
+else {
+
+    Write-Host "NO EXISTE IDENTITY CACHE." -ForegroundColor Red
+}
+
+# ------------------------------------------------------------
+# REGISTRO DEL USUARIO
+#
+# Si el usuario tiene sesión activa, su HKU está cargado.
+# ------------------------------------------------------------
+
+Write-Host ""
+Write-Host "[9] REGISTRO DEL USUARIO" -ForegroundColor Yellow
+
+$HKU = "Registry::HKEY_USERS\$SID"
+
+if (Test-Path $HKU) {
+
+    Write-Host "HIVE DEL USUARIO CARGADO: SI" -ForegroundColor Green
+
+    $IdentityReg = "$HKU\Software\Microsoft\Office\16.0\Common\Identity"
+
+    if (Test-Path $IdentityReg) {
+
+        Write-Host "OFFICE IDENTITY REGISTRO: SI" -ForegroundColor Green
+
+        Get-ItemProperty `
+            $IdentityReg `
+            -ErrorAction SilentlyContinue |
+            Format-List
+
     }
-} | Format-Table -AutoSize
+    else {
+
+        Write-Host "OFFICE IDENTITY REGISTRO: NO" -ForegroundColor Yellow
+    }
+
+}
+else {
+
+    Write-Host "HIVE DEL USUARIO NO ESTA CARGADO." -ForegroundColor Yellow
+    Write-Host "Esto es normal si el usuario no tiene sesión abierta." -ForegroundColor DarkGray
+}
 
 # ------------------------------------------------------------
-# 8. SERVICIO CLICK-TO-RUN
+# CLICK-TO-RUN
 # ------------------------------------------------------------
 
 Write-Host ""
-Write-Host "[7] CLICK-TO-RUN" -ForegroundColor Yellow
+Write-Host "[10] SERVICIO CLICK-TO-RUN" -ForegroundColor Yellow
 
-$Service = Get-Service ClickToRunSvc `
+$Svc = Get-Service ClickToRunSvc `
     -ErrorAction SilentlyContinue
 
-if ($Service) {
+if ($Svc) {
 
-    $Service |
-        Select-Object Name,Status,StartType |
+    [PSCustomObject]@{
+        Servicio = $Svc.Name
+        Estado   = $Svc.Status
+        Inicio   = $Svc.StartType
+    } | Format-List
+
+}
+else {
+
+    Write-Host "SERVICIO NO ENCONTRADO." -ForegroundColor Red
+}
+
+# ------------------------------------------------------------
+# COMPROBAR PROCESOS DEL USUARIO
+# ------------------------------------------------------------
+
+Write-Host ""
+Write-Host "[11] PROCESOS OFFICE DEL USUARIO" -ForegroundColor Yellow
+
+$OfficeProcesses = Get-Process `
+    WINWORD,
+    EXCEL,
+    OUTLOOK,
+    POWERPNT,
+    ONENOTE `
+    -IncludeUserName `
+    -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.UserName -match [regex]::Escape($UserName)
+    }
+
+if ($OfficeProcesses) {
+
+    $OfficeProcesses |
+        Select-Object Name,Id,UserName |
         Format-Table -AutoSize
 
 }
 else {
 
-    Write-Host "ClickToRunSvc NO ENCONTRADO." -ForegroundColor Red
+    Write-Host "No hay procesos Office del usuario actualmente." `
+        -ForegroundColor DarkGray
 }
 
 # ------------------------------------------------------------
-# 9. REGISTRO SCA
+# RESULTADO
 # ------------------------------------------------------------
 
-Write-Host ""
-Write-Host "[8] REGISTRO SCA" -ForegroundColor Yellow
+$TokenCount = 0
 
-$SCAKeys = @(
-    "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration",
-    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office\ClickToRun\Configuration"
-)
+if (Test-Path $LicensingPath) {
 
-foreach ($Key in $SCAKeys) {
-
-    if (Test-Path $Key) {
-
-        Write-Host ""
-        Write-Host $Key -ForegroundColor Cyan
-
-        Get-ItemProperty $Key `
-            -ErrorAction SilentlyContinue |
-            Select-Object `
-                SharedComputerLicensing,
-                SCLCacheOverride,
-                SCLCacheOverrideDirectory,
-                DeviceBasedLicensing |
-            Format-List
-    }
+    $TokenCount = @(
+        Get-ChildItem `
+            $LicensingPath `
+            -Force `
+            -File `
+            -ErrorAction SilentlyContinue
+    ).Count
 }
 
-# ------------------------------------------------------------
-# 10. RESULTADO
-# ------------------------------------------------------------
-
-Write-Host ""
-Write-Host "============================================================" `
-    -ForegroundColor Cyan
-Write-Host " RESULTADO" -ForegroundColor Cyan
-Write-Host "============================================================" `
-    -ForegroundColor Cyan
-
-$SCA = if ($Cfg.SharedComputerLicensing -eq 1) {
+$SCAStatus = if ($Office.SharedComputerLicensing -eq 1) {
     "OK"
 }
 else {
     "ERROR"
 }
 
-$Perfil = if ($UserProfiles.Count -gt 0) {
-    "ENCONTRADO"
+$TokenStatus = if ($TokenCount -gt 0) {
+    "TOKEN ENCONTRADO"
 }
 else {
-    "NO ENCONTRADO"
+    "SIN TOKEN"
 }
 
-$Token = if ($TotalTokens -gt 0) {
-    "ENCONTRADO"
-}
-else {
-    "NO ENCONTRADO"
-}
+Write-Host ""
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host " RESULTADO FINAL" -ForegroundColor Cyan
+Write-Host "============================================================" -ForegroundColor Cyan
 
 [PSCustomObject]@{
-    Servidor       = $env:COMPUTERNAME
-    Usuario        = $UPN
-    Office         = $Cfg.VersionToReport
-    SCA            = $SCA
-    Perfil         = $Perfil
-    Tokens         = $TotalTokens
-    EstadoToken    = $Token
-    ClickToRun     = if ($Service) {
-                         $Service.Status
-                     }
-                     else {
-                         "NO ENCONTRADO"
-                     }
+    Servidor        = $env:COMPUTERNAME
+    UPN             = $UPN
+    SID             = $SID
+    Perfil          = $ProfilePath
+    Office          = $Office.VersionToReport
+    SCA             = $SCAStatus
+    Tokens          = $TokenCount
+    EstadoLicencia  = $TokenStatus
+    ClickToRun      = if ($Svc) { $Svc.Status } else { "NO ENCONTRADO" }
 } | Format-List
 
 Write-Host ""
-Write-Host "============================================================" `
-    -ForegroundColor Cyan
+Write-Host "============================================================" -ForegroundColor Cyan

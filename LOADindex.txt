@@ -1,0 +1,94 @@
+
+# ============================================================
+# CITRIX DAAS - LOAD INDEX POR DELIVERY GROUP MULTISESION
+# PowerShell 7
+# Autenticacion Citrix Cloud previamente establecida
+# ============================================================
+
+$ErrorActionPreference = "Stop"
+
+$OutputFile = "C:\Temp\Citrix_DaaS_LoadIndex_DG_MultiSession.csv"
+
+try {
+
+    # Comprobar SDK
+    if (-not (Get-Command Get-BrokerMachine -ErrorAction SilentlyContinue)) {
+        throw "Get-BrokerMachine no disponible. Comprueba el SDK de Citrix."
+    }
+
+    # Obtener VDA multisesion
+    $Machines = @(
+        Get-BrokerMachine -MaxRecordCount 10000 |
+        Where-Object {
+            $_.SessionSupport -eq "MultiSession" -and
+            -not [string]::IsNullOrWhiteSpace($_.DesktopGroupName)
+        }
+    )
+
+    if ($Machines.Count -eq 0) {
+        Write-Host "No se encontraron VDA multisesion asociados a Delivery Groups."
+        return
+    }
+
+    # Agrupar por Delivery Group
+    $Results = foreach ($DG in ($Machines | Group-Object DesktopGroupName)) {
+
+        $VDA = @($DG.Group)
+
+        $ValidIndex = @(
+            $VDA | Where-Object {
+                $null -ne $_.LoadIndex -and
+                $_.LoadIndex -ge 0 -and
+                $_.LoadIndex -le 10000
+            }
+        )
+
+        $Stats = if ($ValidIndex.Count -gt 0) {
+            $ValidIndex | Measure-Object LoadIndex -Minimum -Maximum -Average
+        }
+
+        [PSCustomObject]@{
+            DeliveryGroup    = $DG.Name
+            TotalVDA         = $VDA.Count
+            RegisteredVDA    = @($VDA | Where-Object {
+                $_.RegistrationState -eq "Registered"
+            }).Count
+            UnregisteredVDA  = @($VDA | Where-Object {
+                $_.RegistrationState -ne "Registered"
+            }).Count
+            VDAWithLoadIndex = $ValidIndex.Count
+            LoadIndexMin     = if ($Stats) { $Stats.Minimum } else { -1 }
+            LoadIndexAvg     = if ($Stats) {
+                [math]::Round($Stats.Average, 0)
+            } else { -1 }
+            LoadIndexMax     = if ($Stats) { $Stats.Maximum } else { -1 }
+        }
+    }
+
+    # Ordenar por Load Index medio
+    $Results = $Results | Sort-Object LoadIndexAvg -Descending
+
+    # Mostrar resultados
+    $Results | Format-Table -AutoSize
+
+    # Crear directorio
+    if (-not (Test-Path "C:\Temp")) {
+        New-Item -Path "C:\Temp" -ItemType Directory -Force |
+            Out-Null
+    }
+
+    # Exportar CSV
+    $Results | Export-Csv `
+        -Path $OutputFile `
+        -NoTypeInformation `
+        -Encoding UTF8
+
+    Write-Host ""
+    Write-Host "Delivery Groups multisesion: $($Results.Count)"
+    Write-Host "Total VDA: $($Machines.Count)"
+    Write-Host "Fichero generado: $OutputFile" -ForegroundColor Green
+
+}
+catch {
+    Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
+}
